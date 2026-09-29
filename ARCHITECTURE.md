@@ -207,8 +207,9 @@ table. `recordCompanionProgress` runs after the result and the status change are
 both committed, takes the user id from the verified token claim rather than
 `auth()` (there is no Clerk cookie on that request), swallows its own failure so
 a dashboard write cannot cost a student their mark, and writes nothing at all
-for a simulation that belongs to no companion. Four verifier checks hold that
-ordering and that column list.
+for a simulation that belongs to no companion. Six verifier checks hold that
+ordering, that column list, and the compare-and-set that stops a double-posted
+result appending two rows to one student's history.
 
 ## What stops the seam rotting
 
@@ -218,11 +219,11 @@ agree drifting apart.
 
 | Verifier | Checks | What it holds |
 |---|---|---|
-| `npm run verify` | 90 | The whole seam — schema, secrets, routes, integrity, progress, boundaries, both apps' launch paths, and the shared look. |
+| `npm run verify` | 92 | The whole seam — schema, secrets, routes, integrity, progress, boundaries, both apps' launch paths, and the shared look. |
 | `npm run verify:outcome` | 18 | The result normalizers against hostile input. |
 | `npm run verify:registry` | 15 | Every seeded character is a real registry role. |
 | `npm run verify:token` | 1 suite | The launch token round-trip: wrong secret, edited payload, expired claim, weak secret. |
-| `npm run verify:engine` | 6 (+1 skipped) | The engine's own behaviour. |
+| `npm run verify:engine` | 7 (1 skipped until install) | The engine's own behaviour. |
 | `npm run verify:classroom` | 70 | The classroom, including its session wiring. |
 
 `npm run verify:all` runs the lot. The integration verifier compares every SQL
@@ -239,8 +240,21 @@ There is no `tsc` in this environment and no installed `node_modules` for the
 suite, so type checking is not available here; `@babel/parser`, borrowed from a
 sibling checkout, is used to prove every new TS/TSX/MJS file at least parses.
 
-Full sweep, all green: integration 90, outcome 18, registry 15, launch-token 1,
-engine 6 (+1 skipped), classroom 70.
+Full sweep, all green: integration 92, outcome 18, registry 15, launch-token 1,
+engine 7 (one of them skipped until `apps/courtroom/node_modules` exists),
+classroom 70. **203 checks.**
+
+One of those 92 is worth naming because it was wrong until the audit caught it.
+`README.md` promises that a Supabase URL, a service-role key, a Clerk secret or a
+model key appearing in either scene app's source fails the build. The check
+behind that sentence tested only the first three words of it — no Clerk secret
+scan outside four named classroom files, and no model-key scan anywhere. It now
+walks both apps' `src` plus their build configs (`next.config.mjs`,
+`vite.config.js`, which are the files that can inline an environment variable
+into a bundle) against all five categories, reads through `codeOnly` so a comment
+explaining an absence cannot fail the check, and reports the file count so it
+cannot pass by scanning nothing. It was verified by planting
+`process.env.GEMINI_API_KEY` in `session/outcome.js` and watching it fail.
 
 ## Phase status
 
@@ -260,7 +274,7 @@ engine 6 (+1 skipped), classroom 70.
 | 12 Shared contracts | done | `packages/contracts`, `packages/launch-token`, `packages/night-desk`. |
 | 13 Cleanup / memory | done | Iframe unmount, `pagehide` beacon, and `three/dispose.js` freeing geometry, material, texture and mixer above the Canvas so React has not yet detached the scene. |
 | 14 Error handling | done | No route leaks an internal error. `LaunchGate` prints the refusal it was given, invents none, and offers Retry only where retrying can help. |
-| 15 Testing | automated green, builds unrun | 200 checks pass. `next build` and `vite build` cannot run in this sandbox; they must be run on the developer's machine. |
+| 15 Testing | automated green, builds unrun | 203 checks pass. `next build` and `vite build` cannot run in this sandbox; they must be run on the developer's machine. |
 | 16 Performance target | met by construction, unmeasured | Zero courtroom cost on LMS pages follows from the dependency graph, but no production build has confirmed it. |
 | 17 Shared look | done | One design pack, `@converso/night-desk`, across the LMS, the classroom and the courtroom. Held by 9 verifier checks. Faces differ — see the deviation above. |
 

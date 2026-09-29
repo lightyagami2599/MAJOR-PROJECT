@@ -22,6 +22,69 @@ If you prefer the CLI and have it installed:
     psql "$SUPABASE_DB_URL" -f db/migrations/0001_simulations.sql
     psql "$SUPABASE_DB_URL" -f db/migrations/0002_seed_simulations.sql
 
+## Rolling one back
+
+There is no `down` file, because there is no migration runner to run it. Rolling
+back is SQL you paste in the same editor, and it comes in two sizes.
+
+**Undo the seed only.** Leaves the tables and anything a student has already
+done, and removes the three catalogue rows. `simulation_sessions.simulation_id`
+is `on delete cascade`, so this also removes sessions and results for those
+hearings — which is what you want if you are re-seeding, and is not what you want
+on a database with real attempts in it. Check the count first:
+
+    select slug, count(ss.id) as attempts
+      from public.simulations s
+      left join public.simulation_sessions ss on ss.simulation_id = s.id
+     where s.slug in ('state-v-rane', 'state-v-malhotra', 'language-room')
+     group by slug;
+
+    delete from public.simulations
+     where slug in ('state-v-rane', 'state-v-malhotra', 'language-room');
+
+Usually you do not need this at all: `0002` upserts on `slug`, so editing a title
+or a character list and re-running it is the ordinary way to change the
+catalogue.
+
+**Undo the whole feature.** Drops everything `0001` added, children first:
+
+    drop table if exists public.simulation_results;
+    drop table if exists public.classroom_sessions;
+    drop table if exists public.simulation_sessions;
+    drop table if exists public.simulations;
+    drop function if exists public.expire_stale_simulation_sessions();
+
+Two things that are easy to get wrong here.
+
+`public.touch_updated_at()` is **not** in that list on purpose. `0001` creates it
+with `create or replace` and the name is generic, so on a project that already
+had a function by that name, 0001 replaced it and a `drop` would take a trigger
+on `companions` or `bookmarks` down with it. Dropping the four tables removes the
+three triggers that reference it and leaves the function harmlessly unused. Drop
+it only after confirming nothing else does:
+
+    select c.relname as table_name, t.tgname
+      from pg_trigger t
+      join pg_class c on c.oid = t.tgrelid
+     where not t.tgisinternal
+       and t.tgfoid = 'public.touch_updated_at'::regproc;
+
+And nothing in a rollback should touch `session_history`. Finishing a simulation
+appends a row to it, exactly as finishing a voice session does, and those rows
+are indistinguishable from each other by design — see the progress deviation in
+`ARCHITECTURE.md`. Deleting a student's simulation history means deleting part of
+their companion history, so a rollback leaves it alone.
+
+After either size, be clear about what you have done to the running app. The
+data layer treats a query error as fatal — every read in
+`apps/lms/lib/actions/simulation.actions.ts` does `if (error) throw new
+Error(error.message)` — and a dropped table is a query error, not an empty
+result. So a full rollback does not make the simulation pages quietly disappear;
+it makes them throw until the code that reads them is removed or the migration is
+re-applied. Nothing outside those pages is affected: no other feature reads these
+four tables. Undoing the seed only is the safe one — those reads get zero rows,
+which is a legitimate answer, and the catalogue simply shows nothing.
+
 ## Why the plan's Prisma models became SQL files
 
 `CONVERSO_COURTROOM_INTEGRATION_PLAN.md` describes `Simulation`,

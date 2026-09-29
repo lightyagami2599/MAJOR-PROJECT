@@ -435,8 +435,15 @@ export const activateSimulationSession = async ({ sessionId, userId, jti }: {
  *
  * The browser's `score` never survives this function: normalize*Result() drops
  * it and recomputes from the counts, which are themselves clamped to what the
- * engine could have produced. `upsert` on session_id keeps a double-post
- * idempotent instead of doubling somebody's history.
+ * engine could have produced.
+ *
+ * Two posts of the same result must not count twice, and the `ALREADY_COMPLETED`
+ * check below is not enough on its own — it reads the status three round-trips
+ * before the write, so two concurrent posts can both pass it. `upsert` on
+ * session_id makes the result row idempotent, and the status write is a
+ * compare-and-set whose outcome decides whether this call is the one that gets
+ * to advance the student's progress. Without that, a double-post appends two
+ * rows to somebody's history for one hearing.
  */
 export const completeSimulationSession = async ({ sessionId, userId, result }: {
     sessionId: string;
@@ -491,18 +498,31 @@ export const completeSimulationSession = async ({ sessionId, userId, result }: {
 
     if (resultError) throw new Error(resultError.message);
 
-    const { error: sessionError } = await supabase
+    // Compare-and-set. `neq COMPLETED` rather than a list of the statuses that
+    // may proceed, because a late result for a session the abandon beacon
+    // already closed is still that student's result and should still be stored —
+    // the only status that must not be overwritten is a completion that has
+    // already happened. `select` makes the outcome readable: no row back means
+    // another request got here first.
+    const { data: closed, error: sessionError } = await supabase
         .from("simulation_sessions")
         .update({
             status: SESSION_STATUS.COMPLETED,
             completed_at: new Date().toISOString(),
         })
         .eq("id", sessionId)
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .neq("status", SESSION_STATUS.COMPLETED)
+        .select("id")
+        .maybeSingle();
 
     if (sessionError) throw new Error(sessionError.message);
 
-    await recordCompanionProgress(session.companionId ?? simulation.companionId, userId);
+    // Lost the race. The result row is already correct — the upsert above is
+    // keyed on session_id — so there is nothing to undo and nothing to add.
+    if (!closed) return { ok: false, reason: "ALREADY_COMPLETED" };
+
+    await recordCompanionProgress(session.companionId, userId);
 
     return { ok: true, result: normalized };
 };
@@ -518,7 +538,18 @@ export const completeSimulationSession = async ({ sessionId, userId, result }: {
  * finished voice session earns — one row, same two columns, same table. Nothing
  * here is a new schema, and nothing here is a second progress system.
  *
- * Three deliberate choices:
+ * Four deliberate choices:
+ *
+ * The companion comes from the *session*, never from the simulation. It is
+ * tempting to fall back to `simulation.companionId` when the session has none,
+ * and it is wrong: `createSimulationSession` already resolves
+ * `companionId ?? simulation.companionId` and freezes the answer onto the row,
+ * so a null here means both were null when the student pressed Start. The
+ * fallback could then only produce a value if the catalogue row was pointed at a
+ * companion *after* the session opened — crediting a companion the student never
+ * launched from, and contradicting the session's own record of what happened.
+ * The seeded catalogue ships with `companion_id` null (see 0002), so this is the
+ * live path rather than a hypothetical.
  *
  * A simulation with no companion writes nothing. The catalogue allows a
  * standalone hearing that belongs to no companion, and inventing a row for it
@@ -533,7 +564,12 @@ export const completeSimulationSession = async ({ sessionId, userId, result }: {
  *
  * It never throws. The result is already stored and the session already closed
  * by the time this runs; turning a graded hearing into a 500 because a history
- * row failed would lose the student their mark to save a dashboard entry.
+ * row failed would lose the student their mark to save a dashboard entry. The
+ * cost of that choice is that the failure is only in the server log, so the
+ * message names the row it could not write — the likeliest cause is a
+ * `companion_id` that no longer exists in `companions`, which neither
+ * `simulations.companion_id` nor `simulation_sessions.companion_id` has a
+ * foreign key to catch earlier.
  */
 const recordCompanionProgress = async (
     companionId: string | null | undefined,
@@ -549,7 +585,10 @@ const recordCompanionProgress = async (
 
         if (error) throw new Error(error.message);
     } catch (err) {
-        console.error("[simulations] could not record companion progress", err);
+        console.error(
+            `[simulations] could not record progress for companion ${companionId}:`,
+            err instanceof Error ? err.message : err,
+        );
     }
 };
 

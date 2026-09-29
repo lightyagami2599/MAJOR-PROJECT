@@ -552,6 +552,57 @@ check('a failed journey entry cannot cost a student their mark', () => {
   return 'result → status → progress, and progress cannot throw'
 })
 
+check('two posts of one result cannot count twice', () => {
+  const actions = codeOnly(read('apps/lms/lib/actions/simulation.actions.ts'))
+  const complete = actions.slice(actions.indexOf('const completeSimulationSession'))
+  const body = complete.slice(0, complete.indexOf('\n};'))
+
+  // The ALREADY_COMPLETED check reads the status three round-trips before the
+  // write, so on its own it does not stop two concurrent posts — both read
+  // 'active', both pass. The status write has to be the decision: a
+  // compare-and-set that reports whether this call is the one that closed the
+  // session, with progress conditional on having won.
+  assert(
+    /\.neq\("status",\s*SESSION_STATUS\.COMPLETED\)/.test(body),
+    'the status write is not a compare-and-set — a double-post closes twice',
+  )
+  assert(
+    /\.select\("id"\)[\s\S]{0,40}maybeSingle\(\)/.test(body),
+    'the status write does not report whether it changed anything',
+  )
+
+  const lost = body.search(/if \(!closed\) return \{ ok: false, reason: "ALREADY_COMPLETED" \}/)
+  const progress = body.indexOf('recordCompanionProgress(')
+  assert(lost !== -1, 'losing the race is not handled')
+  assert(lost < progress, 'progress is recorded before the race is settled')
+
+  // And the result row itself must stay keyed, so the loser's write is a no-op
+  // rather than a second row.
+  assert(
+    /onConflict:\s*"session_id"/.test(body),
+    'simulation_results is no longer keyed on session_id',
+  )
+  return 'compare-and-set on status; only the winner writes progress'
+})
+
+check('progress credits the companion the student actually launched from', () => {
+  const actions = codeOnly(read('apps/lms/lib/actions/simulation.actions.ts'))
+
+  // createSimulationSession already resolves `companionId ?? simulation.companionId`
+  // and freezes it onto the row. Re-doing that resolution here can only change
+  // the answer when the catalogue row was edited mid-session, and then it credits
+  // a companion the session has no record of.
+  assert(
+    /recordCompanionProgress\(\s*session\.companionId\s*,/.test(actions),
+    'progress is not taken from the session row',
+  )
+  assert(
+    !/recordCompanionProgress\([^)]*simulation\.companionId/.test(actions),
+    'falls back to the catalogue’s companion, which the session may not have used',
+  )
+  return 'session.companionId, no fallback'
+})
+
 check('a simulation with no companion writes no progress row', () => {
   const actions = codeOnly(read('apps/lms/lib/actions/simulation.actions.ts'))
   const fn = actions.slice(actions.indexOf('const recordCompanionProgress'))
@@ -667,15 +718,58 @@ check('Clerk is still the only login', () => {
   return `${routes.length} API routes, none of them a login`
 })
 
-check('the heavy apps hold no database credentials', () => {
+/**
+ * The scene apps hold one credential: the launch token Converso minted for this
+ * session. This check is the thing README.md promises when it says a Supabase
+ * URL, a service-role key, a Clerk secret or a model key in either scene's
+ * source fails the build — so the list below has to stay the same length as
+ * that sentence. It was narrower than the sentence once, which is how a claim
+ * becomes a lie.
+ *
+ * Scope is `src` plus each app's build config, and deliberately not `tools/`.
+ * The distinction is what reaches a browser: `next.config.mjs` and
+ * `vite.config.js` can inline an environment variable into a bundle, so they are
+ * in; `apps/classroom/tools/verify-ai.mjs` is a Node script a developer runs, and
+ * it names `OPENAI_API_KEY` precisely in order to assert its absence.
+ *
+ * Read through `codeOnly` for the same reason — a comment explaining that this
+ * app holds no Gemini key must not be the thing that fails the Gemini check.
+ */
+check('the heavy apps hold no key of their own', () => {
+  const forbidden = [
+    [/SERVICE_ROLE/i, 'a Supabase service-role key'],
+    [/SUPABASE_URL|SUPABASE_ANON|supabaseUrl|supabaseKey/i, 'a Supabase connection'],
+    [/LAUNCH_TOKEN_SECRET/i, 'the token signing secret'],
+    [/CLERK_SECRET|CLERK_PUBLISHABLE|clerkSecret/i, 'a Clerk credential'],
+    [/GEMINI|GOOGLE_GENERATIVE|VAPI|OPENAI|ANTHROPIC|API_KEY|apiKey/i, 'a model provider key'],
+
+    // The variable-name patterns above only catch a key read from the
+    // environment. These two catch one pasted in as a literal, which is the
+    // version that actually ships. Both need a length and a word boundary:
+    // `sk-` unanchored matches the middle of `task-force`, and three characters
+    // of base64 matches half the English language.
+    [/\bsk-[A-Za-z0-9_-]{20,}/, 'a provider key pasted as a literal'],
+    [/\beyJ[A-Za-z0-9_-]{20,}\./, 'a JWT pasted as a literal'],
+  ]
+
+  let scanned = 0
   for (const app of ['apps/courtroom', 'apps/classroom']) {
-    for (const file of walk(`${app}/src`, ['.js', '.jsx', '.mjs'])) {
-      const source = read(file)
-      assert(!/SERVICE_ROLE|SUPABASE_URL|LAUNCH_TOKEN_SECRET/.test(source),
-        `${file} references a credential that belongs to the LMS`)
+    const files = [
+      ...walk(`${app}/src`, ['.js', '.jsx', '.mjs', '.ts', '.tsx']),
+      `${app}/next.config.mjs`,
+      `${app}/vite.config.js`,
+      `${app}/index.html`,
+    ]
+    for (const file of files) {
+      if (!existsSync(join(ROOT, file))) continue
+      scanned += 1
+      const source = codeOnly(read(file))
+      for (const [pattern, what] of forbidden) {
+        assert(!pattern.test(source), `${file} references ${what}, which belongs to the LMS`)
+      }
     }
   }
-  return 'they ask Converso instead'
+  return `${scanned} files, none holding more than a launch token`
 })
 
 /* ===========================================================================

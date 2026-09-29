@@ -92,12 +92,16 @@ npm run verify:all
 
 | command | checks | what it holds |
 |---|---|---|
-| `npm run verify` | 90 | the whole seam — schema, secrets, routes, integrity, progress, boundaries, both launch paths, the shared look |
+| `npm run verify` | 92 | the whole seam — schema, secrets, routes, integrity, progress, boundaries, both launch paths, the shared look |
 | `npm run verify:outcome` | 18 | the result normalizers against hostile input |
 | `npm run verify:registry` | 15 | every seeded character is a real registry role |
-| `npm run verify:token` | suite | the launch token: wrong secret, edited payload, expired claim, weak secret |
-| `npm run verify:engine` | 6 | the engine's own behaviour |
+| `npm run verify:token` | 1 | the launch token: wrong secret, edited payload, expired claim, weak secret |
+| `npm run verify:engine` | 7 | the engine's own behaviour |
 | `npm run verify:classroom` | 70 | the classroom, including its session wiring |
+
+203 in total. Before `npm install` you will see 202 and one skip: one engine test
+needs `apps/courtroom/node_modules` to read the frontend it checks against, and
+skips itself by name rather than passing quietly when it is missing.
 
 Add `--verbose` to any of the `.mjs` ones to see each check name and what it
 found rather than just the count.
