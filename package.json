@@ -26,6 +26,9 @@
     "verify:registry": "node --import ./tools/vite-resolve.mjs tools/verify-registry.mjs",
     "verify:token": "node --test packages/launch-token/",
 
+    "preflight": "node deploy/preflight.mjs --env apps/lms/.env.local --env apps/courtroom/.env.local",
+    "preflight:prod": "node deploy/preflight.mjs --production",
+
     "assets": "node tools/optimise-assets.mjs --inventory --verbose",
     "assets:optimise": "node tools/optimise-assets.mjs --verbose",
 
