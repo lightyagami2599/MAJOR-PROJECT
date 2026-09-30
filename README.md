@@ -152,6 +152,13 @@ Set `VITE_COURT_WS_URL=off` to run the room with no engine either.
 Two things this sandbox cannot do and you can: `next build`, `vite build` and
 `tsc` have never been run against this tree. Run them before you trust a deploy.
 
+`DEPLOY.md` covers putting it on the internet: which host each of the four
+processes belongs on and why, the `deploy/` Dockerfile and Fly config for the
+engine, the full environment table per surface, and the six mistakes that are
+easy to make once and hard to diagnose. Start with its Step 0 — shrinking the
+models changes which hosts are even possible, because `CourtRoom.glb` at 105 MB
+is over most per-file limits.
+
 ## Ground rules
 
 Three of them, and they are not style preferences.
