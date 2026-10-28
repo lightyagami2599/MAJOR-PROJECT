@@ -50,10 +50,12 @@ tools/.assets-out/
 # This is worth revisiting after `npm run assets:optimise`: the same ten files
 # come out at roughly 31 MB total with no file near the limit, which is small
 # enough to commit outright.
-apps/courtroom/public/models/*.glb
-apps/classroom/public/models/*.glb
-apps/classroom/public/models/*.fbx
-apps/courtroom/public/video/*.mp4
+
+
+# apps/courtroom/public/models/*.glb
+# apps/classroom/public/models/*.glb
+# apps/classroom/public/models/*.fbx
+# apps/courtroom/public/video/*.mp4
 
 # Editors and operating systems
 .DS_Store
